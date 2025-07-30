@@ -1,6 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Sector } from 'recharts';
-import { ChevronDown, ChevronUp, Search, Sun, Moon, Users, DollarSign, BarChart2, CheckSquare } from 'lucide-react';
+import { ChevronDown, ChevronUp, Search, Sun, Moon, Users, DollarSign, BarChart2, CheckSquare, Download } from 'lucide-react';
+
+// --- REQUIRED DEPENDENCIES FOR EXPORT ---
+// npm install jspdf jspdf-autotable html2canvas papaparse
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import html2canvas from 'html2canvas';
+import Papa from 'papaparse';
+
 
 // --- MOCK DATA FETCHING ---
 const fetchUsers = () => {
@@ -38,6 +46,42 @@ const useTheme = () => {
 
 
 // --- UI COMPONENTS ---
+
+const ExportMenu = ({ onExportPDF, onExportCSV, disabled }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const menuRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (menuRef.current && !menuRef.current.contains(event.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    return (
+        <div className="relative" ref={menuRef}>
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                disabled={disabled}
+                className="flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                <Download className="h-4 w-4 mr-2" />
+                Export
+                <ChevronDown className={`h-4 w-4 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isOpen && (
+                <div className="absolute right-0 mt-2 w-40 bg-white dark:bg-gray-800 rounded-lg shadow-xl z-10 border dark:border-gray-700">
+                    {onExportPDF && <button onClick={() => { onExportPDF(); setIsOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Export as PDF</button>}
+                    {onExportCSV && <button onClick={() => { onExportCSV(); setIsOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">Export as CSV</button>}
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 const MetricCard = ({ title, value, change, icon: Icon, isLoading }) => {
     if (isLoading) {
@@ -77,14 +121,49 @@ const MetricCardSkeleton = () => (
 );
 
 
-const ChartContainer = ({ title, children, isLoading }) => (
-    <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md transition-all duration-300">
-        <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">{title}</h3>
-        <div style={{ height: '300px' }}>
-            {isLoading ? <ChartSkeleton /> : children}
+const ChartContainer = ({ title, children, isLoading, onExportCSV = null }) => {
+    const chartRef = useRef(null);
+
+    const handleExportPDF = () => {
+        if (!chartRef.current) return;
+        const chartTitle = title || 'Chart';
+        // Temporarily set body background to white for canvas rendering
+        const originalBackgroundColor = document.body.style.backgroundColor;
+        document.body.style.backgroundColor = 'white';
+
+        html2canvas(chartRef.current).then((canvas) => {
+            // Restore original body background color
+            document.body.style.backgroundColor = originalBackgroundColor;
+            
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF('landscape', 'px', 'a4');
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = pdf.internal.pageSize.getHeight();
+            const canvasWidth = canvas.width;
+            const canvasHeight = canvas.height;
+            const ratio = canvasWidth / canvasHeight;
+            const width = pdfWidth - 40; // with some padding
+            const height = width / ratio;
+
+            pdf.setFontSize(20);
+            pdf.text(chartTitle, 20, 30);
+            pdf.addImage(imgData, 'PNG', 20, 50, width, height);
+            pdf.save(`${chartTitle.toLowerCase().replace(/ /g, '-')}-chart.pdf`);
+        });
+    };
+    
+    return (
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md transition-all duration-300">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">{title}</h3>
+                <ExportMenu onExportPDF={handleExportPDF} onExportCSV={onExportCSV} disabled={isLoading} />
+            </div>
+            <div style={{ height: '300px' }} ref={chartRef}>
+                {isLoading ? <ChartSkeleton /> : children}
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 const ChartSkeleton = () => (
     <div className="w-full h-full flex items-end justify-between animate-pulse px-4">
@@ -178,7 +257,7 @@ const ActiveShapePieChart = ({ data, isLoading }) => {
     );
 };
 
-const DataTable = ({ data, isLoading }) => {
+const DataTable = ({ title, data, isLoading }) => {
     const [sortConfig, setSortConfig] = useState({ key: 'id', direction: 'ascending' });
     const [currentPage, setCurrentPage] = useState(1);
     const [filter, setFilter] = useState('');
@@ -207,7 +286,7 @@ const DataTable = ({ data, isLoading }) => {
         }
         return sortableItems;
     }, [filteredData, sortConfig]);
-
+    
     const requestSort = (key) => {
         let direction = 'ascending';
         if (sortConfig.key === key && sortConfig.direction === 'ascending') {
@@ -224,7 +303,47 @@ const DataTable = ({ data, isLoading }) => {
         if (sortConfig.direction === 'ascending') return <ChevronUp className="h-4 w-4 inline ml-1" />;
         return <ChevronDown className="h-4 w-4 inline ml-1" />;
     };
-    
+
+    const handleExportCSV = () => {
+        const dataToExport = sortedData.map(u => ({
+            ID: u.id,
+            'First Name': u.firstName,
+            'Last Name': u.lastName,
+            Email: u.email,
+            Company: u.company.name,
+            'Job Title': u.company.title,
+        }));
+        const csv = Papa.unparse(dataToExport);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', `${title.toLowerCase().replace(/ /g, '-')}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    const handleExportPDF = () => {
+        const doc = new jsPDF();
+        const tableHead = [['ID', 'Name', 'Email', 'Company', 'Job Title']];
+        const tableBody = sortedData.map(u => [
+            u.id,
+            `${u.firstName} ${u.lastName}`,
+            u.email,
+            u.company.name,
+            u.company.title,
+        ]);
+
+        doc.setFontSize(18);
+        doc.text(title, 14, 22);
+        doc.autoTable({
+            head: tableHead,
+            body: tableBody,
+            startY: 30,
+        });
+        doc.save(`${title.toLowerCase().replace(/ /g, '-')}.pdf`);
+    };
+
     if (isLoading) {
         return <DataTableSkeleton />;
     }
@@ -232,16 +351,19 @@ const DataTable = ({ data, isLoading }) => {
     return (
         <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md transition-all duration-300">
             <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">User List</h3>
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-                    <input
-                        type="text"
-                        placeholder="Filter users..."
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                        className="pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                 <h3 className="text-lg font-semibold text-gray-800 dark:text-white">{title}</h3>
+                <div className="flex items-center space-x-4">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                        <input
+                            type="text"
+                            placeholder="Filter users..."
+                            value={filter}
+                            onChange={(e) => setFilter(e.target.value)}
+                            className="pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                    <ExportMenu onExportPDF={handleExportPDF} onExportCSV={handleExportCSV} disabled={isLoading} />
                 </div>
             </div>
             <div className="overflow-x-auto">
@@ -465,10 +587,9 @@ export default function App() {
                     </div>
 
                     {/* Data Table */}
-                    <DataTable data={users} isLoading={isLoading} />
+                    <DataTable title="User List" data={users} isLoading={isLoading} />
                 </main>
             </div>
         </div>
     );
 }
-
